@@ -5,11 +5,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Microsoft.AspNetCore.Server.HttpSys\Microsoft.AspNetCore.Server.HttpSys.csproj" />
+    <Reference Include="Microsoft.AspNetCore.Server.HttpSys" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.Net.Http.WinHttpHandler" Version="$(SystemNetHttpWinHttpHandlerPackageVersion)" />
+    <Reference Include="System.Net.Http.WinHttpHandler" />
   </ItemGroup>
 
 </Project>
