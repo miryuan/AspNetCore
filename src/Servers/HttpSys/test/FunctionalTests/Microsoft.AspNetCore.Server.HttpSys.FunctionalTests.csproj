@@ -6,9 +6,6 @@
 
   <ItemGroup>
     <Reference Include="Microsoft.AspNetCore.Server.HttpSys" />
-  </ItemGroup>
-
-  <ItemGroup>
     <Reference Include="System.Net.Http.WinHttpHandler" />
   </ItemGroup>
 

@@ -10,7 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="..\..\shared\Microsoft.AspNetCore.HttpSys.Sources\**\*.cs" />
+    <Compile Include="$(SharedSourceRoot)HttpSys\**\*.cs" />
   </ItemGroup>
 
   <ItemGroup>
