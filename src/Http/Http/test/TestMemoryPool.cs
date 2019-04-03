@@ -9,17 +9,19 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 
-namespace Microsoft.AspNetCore.Http.Tests
+namespace System.IO.Pipelines.Tests
 {
     public class TestMemoryPool : MemoryPool<byte>
     {
         private MemoryPool<byte> _pool;
-
+        private int _maxBufferSize;
         private bool _disposed;
         private int _rentCount;
-        public TestMemoryPool()
+
+        public TestMemoryPool(int maxBufferSize = 4096)
         {
             _pool = new CustomMemoryPool<byte>();
+            _maxBufferSize = maxBufferSize;
         }
 
         public override IMemoryOwner<byte> Rent(int minBufferSize = -1)
@@ -39,7 +41,7 @@ namespace Microsoft.AspNetCore.Http.Tests
             _disposed = true;
         }
 
-        public override int MaxBufferSize => 4096;
+        public override int MaxBufferSize => _maxBufferSize;
 
         internal void CheckDisposed()
         {

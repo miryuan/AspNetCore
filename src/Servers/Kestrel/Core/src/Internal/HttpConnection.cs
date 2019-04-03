@@ -1,4 +1,4 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
+// Copyright (c) .NET Foundation. All rights reserved.
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 
 using System;
@@ -23,7 +23,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal
 {
-    public class HttpConnection : ITimeoutHandler
+    internal class HttpConnection : ITimeoutHandler
     {
         private static readonly ReadOnlyMemory<byte> Http2Id = new[] { (byte)'h', (byte)'2' };
 
@@ -149,7 +149,7 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal
                                     break;
                                 case HttpProtocols.None:
                                     // An error was already logged in SelectProtocol(), but we should close the connection.
-                                    Abort(ex: null);
+                                    Abort(new ConnectionAbortedException(CoreStrings.ProtocolSelectionFailed));
                                     break;
                                 default:
                                     // SelectProtocol() only returns Http1, Http2 or None.
@@ -222,7 +222,7 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal
                 switch (_protocolSelectionState)
                 {
                     case ProtocolSelectionState.Initializing:
-                        CloseUninitializedConnection(abortReason: null);
+                        CloseUninitializedConnection(new ConnectionAbortedException(CoreStrings.ServerShutdownDuringConnectionInitialization));
                         _protocolSelectionState = ProtocolSelectionState.Aborted;
                         break;
                     case ProtocolSelectionState.Selected:
@@ -241,7 +241,10 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal
                 switch (_protocolSelectionState)
                 {
                     case ProtocolSelectionState.Initializing:
-                        CloseUninitializedConnection(abortReason: null);
+                        // OnReader/WriterCompleted callbacks are not wired until after leaving the Initializing state.
+                        Debug.Assert(false);
+
+                        CloseUninitializedConnection(new ConnectionAbortedException("HttpConnection.OnInputOrOutputCompleted() called while in the ProtocolSelectionState.Initializing state!?"));
                         _protocolSelectionState = ProtocolSelectionState.Aborted;
                         break;
                     case ProtocolSelectionState.Selected:

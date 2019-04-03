@@ -5,14 +5,13 @@ using System;
 using System.IO;
 using System.IO.Pipelines;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http;
 using Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Infrastructure;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 using Microsoft.Extensions.Logging;
 
 namespace Microsoft.AspNetCore.Server.Kestrel.Core.Adapter.Internal
 {
-    public class AdaptedPipeline : IDuplexPipe
+    internal class AdaptedPipeline : IDuplexPipe
     {
         private static readonly int MinAllocBufferSize = KestrelMemoryPool.MinimumSegmentSize / 2;
 
@@ -74,27 +73,13 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Adapter.Internal
                         }
                         else if (buffer.IsSingleSegment)
                         {
-#if NETCOREAPP2_1
                             await stream.WriteAsync(buffer.First);
-#elif NETSTANDARD2_0
-                            var array = buffer.First.GetArray();
-                            await stream.WriteAsync(array.Array, array.Offset, array.Count);
-#else
-#error TFMs need to be updated
-#endif
                         }
                         else
                         {
                             foreach (var memory in buffer)
                             {
-#if NETCOREAPP2_1
                                 await stream.WriteAsync(memory);
-#elif NETSTANDARD2_0
-                                var array = memory.GetArray();
-                                await stream.WriteAsync(array.Array, array.Offset, array.Count);
-#else
-#error TFMs need to be updated
-#endif
                             }
                         }
                     }
@@ -131,14 +116,7 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Adapter.Internal
                 {
 
                     var outputBuffer = Input.Writer.GetMemory(MinAllocBufferSize);
-#if NETCOREAPP2_1
                     var bytesRead = await stream.ReadAsync(outputBuffer);
-#elif NETSTANDARD2_0
-                    var array = outputBuffer.GetArray();
-                    var bytesRead = await stream.ReadAsync(array.Array, array.Offset, array.Count);
-#else
-#error TFMs need to be updated
-#endif
                     Input.Writer.Advance(bytesRead);
 
                     if (bytesRead == 0)

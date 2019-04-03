@@ -1,18 +1,19 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
+// Copyright (c) .NET Foundation. All rights reserved.
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 
-#if NETCOREAPP2_2
 using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using Microsoft.AspNetCore.Testing.xunit;
 using Xunit;
 
 namespace Microsoft.AspNetCore.Server.Kestrel.FunctionalTests
 {
     public class GeneratedCodeTests
     {
-        [Fact]
+        [ConditionalFact] 
+        [SkipOnHelix] // https://github.com/aspnet/AspNetCore/issues/6720
         public void GeneratedCodeIsUpToDate()
         {
             var repositoryRoot = typeof(GeneratedCodeTests).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>().First(f => string.Equals(f.Key, "RepositoryRoot", StringComparison.OrdinalIgnoreCase)).Value;
@@ -57,7 +58,3 @@ namespace Microsoft.AspNetCore.Server.Kestrel.FunctionalTests
         }
     }
 }
-#elif NET461
-#else
-#error Target framework needs to be updated
-#endif

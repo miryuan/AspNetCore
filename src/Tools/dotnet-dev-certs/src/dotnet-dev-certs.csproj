@@ -7,25 +7,17 @@
     <RootNamespace>Microsoft.AspNetCore.DeveloperCertificates.Tools</RootNamespace>
     <PackageTags>dotnet;developercertificates</PackageTags>
     <PackAsTool>true</PackAsTool>
-    <!-- This is a requirement for Microsoft tool packages only. -->
-    <PackAsToolShimRuntimeIdentifiers>win-x64;win-x86</PackAsToolShimRuntimeIdentifiers>
+    <!-- This package is for internal use only. It contains a CLI which is bundled in the .NET Core SDK. -->
+    <IsShippingPackage>false</IsShippingPackage>
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="..\..\shared\src\CliContext.cs" Link="CliContext.cs" />
-    <Compile Include="..\..\shared\src\CommandLineApplicationExtensions.cs" Link="CommandLineApplicationExtensions.cs" />
-    <Compile Include="..\..\shared\src\ConsoleReporter.cs" Link="ConsoleReporter.cs" />
-    <Compile Include="..\..\shared\src\DebugHelper.cs" Link="DebugHelper.cs" />
-    <Compile Include="..\..\shared\src\Ensure.cs" Link="Ensure.cs" />
-    <Compile Include="..\..\shared\src\IConsole.cs" Link="IConsole.cs" />
-    <Compile Include="..\..\shared\src\IReporter.cs" Link="IReporter.cs" />
-    <Compile Include="..\..\shared\src\NullReporter.cs" Link="NullReporter.cs" />
-    <Compile Include="..\..\shared\src\PhysicalConsole.cs" Link="PhysicalConsole.cs" />
+    <Compile Include="$(SharedSourceRoot)CertificateGeneration\**\*.cs" />
+    <Compile Include="$(ToolSharedSourceRoot)CommandLine\**\*.cs" />
   </ItemGroup>
 
   <ItemGroup>
-    <Reference Include="Microsoft.AspNetCore.Certificates.Generation.Sources" PrivateAssets="All" />
-    <Reference Include="Microsoft.Extensions.CommandLineUtils.Sources" PrivateAssets="All" />
+    <Reference Include="Microsoft.Extensions.CommandLineUtils.Sources" />
     <Reference Include="System.Security.Cryptography.Cng" />
   </ItemGroup>
 

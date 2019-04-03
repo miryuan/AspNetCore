@@ -150,6 +150,72 @@ describe("HttpConnection", () => {
         });
     });
 
+    it("cannot send with an un-started connection", async () => {
+        await VerifyLogger.run(async (logger) => {
+            const connection = new HttpConnection("http://tempuri.org");
+
+            await expect(connection.send("LeBron James"))
+                .rejects
+                .toThrow("Cannot send data if the connection is not in the 'Connected' State.");
+        });
+    });
+
+    it("sending before start doesn't throw synchronously", async () => {
+        await VerifyLogger.run(async (logger) => {
+            const connection = new HttpConnection("http://tempuri.org");
+
+            try {
+                connection.send("test").catch((e) => {});
+            } catch (e) {
+                expect(false).toBe(true);
+            }
+
+        });
+    });
+
+    it("cannot be started if negotiate returns non 200 response", async () => {
+        await VerifyLogger.run(async (logger) => {
+            const options: IHttpConnectionOptions = {
+                ...commonOptions,
+                httpClient: new TestHttpClient()
+                    .on("POST", () => new HttpResponse(999))
+                    .on("GET", () => ""),
+                logger,
+            } as IHttpConnectionOptions;
+
+            const connection = new HttpConnection("http://tempuri.org", options);
+            await expect(connection.start(TransferFormat.Text))
+                .rejects
+                .toThrow("Unexpected status code returned from negotiate 999");
+        },
+        "Failed to start the connection: Error: Unexpected status code returned from negotiate 999");
+    });
+
+    it("all transport failure error get aggregated", async () => {
+        await VerifyLogger.run(async (loggerImpl) => {
+            const options: IHttpConnectionOptions = {
+                WebSocket: false,
+                ...commonOptions,
+                httpClient: new TestHttpClient()
+                    .on("POST", () => defaultNegotiateResponse)
+                    .on("GET", () => new HttpResponse(200))
+                    .on("DELETE", () => new HttpResponse(202)),
+
+                logger: loggerImpl,
+                transport: HttpTransportType.WebSockets,
+            } as IHttpConnectionOptions;
+
+            const connection = new HttpConnection("http://tempuri.org", options);
+            await expect(connection.start(TransferFormat.Text))
+                .rejects
+                .toThrow("Unable to connect to the server with any of the available transports. WebSockets failed: null ServerSentEvents failed: Error: 'ServerSentEvents' is disabled by the client. LongPolling failed: Error: 'LongPolling' is disabled by the client.");
+        },
+        "Failed to start the transport 'WebSockets': null",
+        "Failed to start the transport 'ServerSentEvents': Error: 'ServerSentEvents' is disabled by the client.",
+        "Failed to start the transport 'LongPolling': Error: 'LongPolling' is disabled by the client.",
+        "Failed to start the connection: Error: Unable to connect to the server with any of the available transports. WebSockets failed: null ServerSentEvents failed: Error: 'ServerSentEvents' is disabled by the client. LongPolling failed: Error: 'LongPolling' is disabled by the client.");
+    });
+
     it("can stop a non-started connection", async () => {
         await VerifyLogger.run(async (logger) => {
             const connection = new HttpConnection("http://tempuri.org", { ...commonOptions, logger });
@@ -171,9 +237,9 @@ describe("HttpConnection", () => {
 
             await expect(connection.start(TransferFormat.Text))
                 .rejects
-                .toThrow("Unable to initialize any of the available transports.");
+                .toThrow("None of the transports supported by the client are supported by the server.");
         },
-        "Failed to start the connection: Error: Unable to initialize any of the available transports.");
+        "Failed to start the connection: Error: None of the transports supported by the client are supported by the server.");
     });
 
     it("preserves user's query string", async () => {
@@ -273,9 +339,11 @@ describe("HttpConnection", () => {
 
                 await expect(connection.start(TransferFormat.Text))
                     .rejects
-                    .toThrow("Unable to initialize any of the available transports.");
+                    .toThrow(`Unable to connect to the server with any of the available transports. ${negotiateResponse.availableTransports[0].transport} failed: Error: '${negotiateResponse.availableTransports[0].transport}' is disabled by the client.` +
+                    ` ${negotiateResponse.availableTransports[1].transport} failed: Error: '${negotiateResponse.availableTransports[1].transport}' is disabled by the client.`);
             },
-            "Failed to start the connection: Error: Unable to initialize any of the available transports.");
+            /Failed to start the connection: Error: Unable to connect to the server with any of the available transports. [a-zA-Z]+\b failed: Error: '[a-zA-Z]+\b' is disabled by the client. [a-zA-Z]+\b failed: Error: '[a-zA-Z]+\b' is disabled by the client./,
+            /Failed to start the transport '[a-zA-Z]+': Error: '[a-zA-Z]+' is disabled by the client./);
         });
 
         it(`cannot be started if server's only transport (${HttpTransportType[requestedTransport]}) is masked out by the transport option`, async () => {
@@ -311,10 +379,11 @@ describe("HttpConnection", () => {
                     await connection.start(TransferFormat.Text);
                     fail("Expected connection.start to throw!");
                 } catch (e) {
-                    expect(e.message).toBe("Unable to initialize any of the available transports.");
+                    expect(e.message).toBe(`Unable to connect to the server with any of the available transports. ${HttpTransportType[requestedTransport]} failed: Error: '${HttpTransportType[requestedTransport]}' is disabled by the client.`);
                 }
             },
-            "Failed to start the connection: Error: Unable to initialize any of the available transports.");
+                `Failed to start the connection: Error: Unable to connect to the server with any of the available transports. ${HttpTransportType[requestedTransport]} failed: Error: '${HttpTransportType[requestedTransport]}' is disabled by the client.`,
+                `Failed to start the transport '${HttpTransportType[requestedTransport]}': Error: '${HttpTransportType[requestedTransport]}' is disabled by the client.`);
         });
     });
 
@@ -378,9 +447,9 @@ describe("HttpConnection", () => {
             const connection = new HttpConnection("http://tempuri.org", options);
             await expect(connection.start(TransferFormat.Text))
                 .rejects
-                .toThrow("Unable to initialize any of the available transports.");
+                .toThrow("None of the transports supported by the client are supported by the server.");
         },
-        "Failed to start the connection: Error: Unable to initialize any of the available transports.");
+        "Failed to start the connection: Error: None of the transports supported by the client are supported by the server.");
     });
 
     it("does not send negotiate request if WebSockets transport requested explicitly and skipNegotiation is true", async () => {
@@ -694,12 +763,12 @@ describe("HttpConnection", () => {
 
                 await expect(connection.start(TransferFormat.Text))
                     .rejects
-                    .toEqual(new Error("Unable to initialize any of the available transports."));
+                    .toEqual(new Error("Unable to connect to the server with any of the available transports. ServerSentEvents failed: Error: EventSource constructor called."));
 
                 expect(eventSourceConstructorCalled).toEqual(true);
             },
             "Failed to start the transport 'ServerSentEvents': Error: EventSource constructor called.",
-            "Failed to start the connection: Error: Unable to initialize any of the available transports.");
+            "Failed to start the connection: Error: Unable to connect to the server with any of the available transports. ServerSentEvents failed: Error: EventSource constructor called.");
         });
 
         it("uses WebSocket constructor from options if provided", async () => {

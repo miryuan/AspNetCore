@@ -1,30 +1,27 @@
 // Copyright (c) .NET Foundation. All rights reserved.
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 
-using System;
 using System.Buffers;
 using System.Diagnostics;
-using System.IO;
-using System.IO.Pipelines;
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Microsoft.AspNetCore.Http
+namespace System.IO.Pipelines
 {
     /// <summary>
     /// Implements PipeReader using an underlying stream.
     /// </summary>
-    public class StreamPipeReader : PipeReader
+    public class StreamPipeReader : PipeReader, IDisposable
     {
-        private readonly int _minimumSegmentSize;
-        private readonly Stream _readingStream;
+        private readonly int _bufferSize;
+        private readonly int _minimumReadThreshold;
         private readonly MemoryPool<byte> _pool;
 
         private CancellationTokenSource _internalTokenSource;
-        private bool _isCompleted;
+        private bool _isReaderCompleted;
+        private bool _isStreamCompleted;
         private ExceptionDispatchInfo _exceptionInfo;
 
         private BufferSegment _readHead;
@@ -35,11 +32,55 @@ namespace Microsoft.AspNetCore.Http
         private bool _examinedEverything;
         private object _lock = new object();
 
+        /// <summary>
+        /// Creates a new StreamPipeReader.
+        /// </summary>
+        /// <param name="readingStream">The stream to read from.</param>
+        public StreamPipeReader(Stream readingStream)
+            : this(readingStream, StreamPipeReaderOptions.DefaultOptions)
+        {
+        }
+
+        /// <summary>
+        /// Creates a new StreamPipeReader.
+        /// </summary>
+        /// <param name="readingStream">The stream to read from.</param>
+        /// <param name="options">The options to use.</param>
+        public StreamPipeReader(Stream readingStream, StreamPipeReaderOptions options)
+        {
+            InnerStream = readingStream ?? throw new ArgumentNullException(nameof(readingStream));
+
+            if (options == null)
+            {
+                throw new ArgumentNullException(nameof(options));
+            }
+
+            if (options.MinimumReadThreshold <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(options.MinimumReadThreshold));
+            }
+
+            _minimumReadThreshold = Math.Min(options.MinimumReadThreshold, options.MinimumSegmentSize);
+            _pool = options.MemoryPool == MemoryPool<byte>.Shared ? null : options.MemoryPool;
+            _bufferSize = _pool == null ? options.MinimumSegmentSize : Math.Min(options.MinimumSegmentSize, _pool.MaxBufferSize);
+        }
+
+        /// <summary>
+        /// Gets the inner stream that is being read from.
+        /// </summary>
+        public Stream InnerStream { get; }
+
+        /// <inheritdoc />
+        public override void AdvanceTo(SequencePosition consumed)
+        {
+            AdvanceTo(consumed, consumed);
+        }
+
         private CancellationTokenSource InternalTokenSource
         {
             get
             {
-                lock(_lock)
+                lock (_lock)
                 {
                     if (_internalTokenSource == null)
                     {
@@ -52,34 +93,6 @@ namespace Microsoft.AspNetCore.Http
             {
                 _internalTokenSource = value;
             }
-
-        }
-
-        /// <summary>
-        /// Creates a new StreamPipeReader.
-        /// </summary>
-        /// <param name="readingStream">The stream to read from.</param>
-        public StreamPipeReader(Stream readingStream) : this(readingStream, minimumSegmentSize: 4096)
-        {
-        }
-
-        /// <summary>
-        /// Creates a new StreamPipeReader.
-        /// </summary>
-        /// <param name="readingStream">The stream to read from.</param>
-        /// <param name="minimumSegmentSize">The minimum segment size to return from ReadAsync.</param>
-        /// <param name="pool"></param>
-        public StreamPipeReader(Stream readingStream, int minimumSegmentSize, MemoryPool<byte> pool = null)
-        {
-            _minimumSegmentSize = minimumSegmentSize;
-            _readingStream = readingStream;
-            _pool = pool ?? MemoryPool<byte>.Shared;
-        }
-
-        /// <inheritdoc />
-        public override void AdvanceTo(SequencePosition consumed)
-        {
-            AdvanceTo(consumed, consumed);
         }
 
         /// <inheritdoc />
@@ -117,7 +130,7 @@ namespace Microsoft.AspNetCore.Http
             {
                 // If we examined everything, we force ReadAsync to actually read from the underlying stream
                 // instead of returning a ReadResult from TryRead.
-                _examinedEverything = examinedIndex == _readTail.End - _readTail.Start;
+                _examinedEverything = examinedIndex == _readTail.End;
             }
 
             // Three cases here:
@@ -164,12 +177,12 @@ namespace Microsoft.AspNetCore.Http
         /// <inheritdoc />
         public override void Complete(Exception exception = null)
         {
-            if (_isCompleted)
+            if (_isReaderCompleted)
             {
                 return;
             }
 
-            _isCompleted = true;
+            _isReaderCompleted = true;
             if (exception != null)
             {
                 _exceptionInfo = ExceptionDispatchInfo.Capture(exception);
@@ -202,6 +215,11 @@ namespace Microsoft.AspNetCore.Http
                 return readResult;
             }
 
+            if (_isStreamCompleted)
+            {
+                return new ReadResult(buffer: default, isCanceled: false, isCompleted: true);
+            }
+
             var reg = new CancellationTokenRegistration();
             if (cancellationToken.CanBeCanceled)
             {
@@ -214,8 +232,8 @@ namespace Microsoft.AspNetCore.Http
                 try
                 {
                     AllocateReadTail();
-#if NETCOREAPP2_2
-                    var length = await _readingStream.ReadAsync(_readTail.AvailableMemory.Slice(_readTail.End), tokenSource.Token);
+#if NETCOREAPP3_0
+                    var length = await InnerStream.ReadAsync(_readTail.AvailableMemory.Slice(_readTail.End), tokenSource.Token);
 #elif NETSTANDARD2_0
                     if (!MemoryMarshal.TryGetArray<byte>(_readTail.AvailableMemory.Slice(_readTail.End), out var arraySegment))
                     {
@@ -230,6 +248,11 @@ namespace Microsoft.AspNetCore.Http
 
                     _readTail.End += length;
                     _bufferedBytes += length;
+
+                    if (length == 0)
+                    {
+                        _isStreamCompleted = true;
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -249,7 +272,7 @@ namespace Microsoft.AspNetCore.Http
 
         private void ClearCancellationToken()
         {
-            lock(_lock)
+            lock (_lock)
             {
                 _internalTokenSource = null;
             }
@@ -257,7 +280,7 @@ namespace Microsoft.AspNetCore.Http
 
         private void ThrowIfCompleted()
         {
-            if (_isCompleted)
+            if (_isReaderCompleted)
             {
                 ThrowHelper.ThrowInvalidOperationException_NoReadingAllowed();
             }
@@ -273,7 +296,7 @@ namespace Microsoft.AspNetCore.Http
         private bool TryReadInternal(CancellationTokenSource source, out ReadResult result)
         {
             var isCancellationRequested = source.IsCancellationRequested;
-            if (isCancellationRequested || _bufferedBytes > 0 && !_examinedEverything)
+            if (isCancellationRequested || _bufferedBytes > 0 && (!_examinedEverything || _isStreamCompleted))
             {
                 // If TryRead/ReadAsync are called and cancellation is requested, we need to make sure memory is allocated for the ReadResult,
                 // otherwise if someone calls advance afterward on the ReadResult, it will throw.
@@ -297,7 +320,7 @@ namespace Microsoft.AspNetCore.Http
 
         private ReadOnlySequence<byte> GetCurrentReadOnlySequence()
         {
-            return new ReadOnlySequence<byte>(_readHead, _readIndex, _readTail, _readTail.End - _readTail.Start);
+            return new ReadOnlySequence<byte>(_readHead, _readIndex, _readTail, _readTail.End);
         }
 
         private void AllocateReadTail()
@@ -305,11 +328,10 @@ namespace Microsoft.AspNetCore.Http
             if (_readHead == null)
             {
                 Debug.Assert(_readTail == null);
-                _readHead = CreateBufferSegment();
-                _readHead.SetMemory(_pool.Rent(GetSegmentSize()));
+                _readHead = AllocateSegment();
                 _readTail = _readHead;
             }
-            else if (_readTail.WritableBytes == 0)
+            else if (_readTail.WritableBytes < _minimumReadThreshold)
             {
                 CreateNewTailSegment();
             }
@@ -317,18 +339,25 @@ namespace Microsoft.AspNetCore.Http
 
         private void CreateNewTailSegment()
         {
-            var nextSegment = CreateBufferSegment();
-            nextSegment.SetMemory(_pool.Rent(GetSegmentSize()));
+            BufferSegment nextSegment = AllocateSegment();
             _readTail.SetNext(nextSegment);
             _readTail = nextSegment;
         }
 
-        private int GetSegmentSize() => Math.Min(_pool.MaxBufferSize, _minimumSegmentSize);
-
-        private BufferSegment CreateBufferSegment()
+        private BufferSegment AllocateSegment()
         {
-            // TODO this can pool buffer segment objects
-            return new BufferSegment();
+            var nextSegment = new BufferSegment();
+
+            if (_pool is null)
+            {
+                nextSegment.SetMemory(ArrayPool<byte>.Shared.Rent(_bufferSize));
+            }
+            else
+            {
+                nextSegment.SetMemory(_pool.Rent(_bufferSize));
+            }
+
+            return nextSegment;
         }
 
         private void Cancel()
@@ -339,7 +368,7 @@ namespace Microsoft.AspNetCore.Http
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool IsCompletedOrThrow()
         {
-            if (!_isCompleted)
+            if (!_isStreamCompleted)
             {
                 return false;
             }

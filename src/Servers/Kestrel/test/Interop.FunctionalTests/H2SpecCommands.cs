@@ -7,13 +7,17 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using System.Xml;
 using Microsoft.Extensions.Logging;
+using Xunit;
 
 namespace Interop.FunctionalTests
 {
     public static class H2SpecCommands
     {
+        private const int TimeoutSeconds = 15;
+
         private static string GetToolLocation()
         {
             var root = Path.Combine(Environment.CurrentDirectory, "h2spec");
@@ -166,23 +170,57 @@ namespace Interop.FunctionalTests
             return false;
         }
 
-        public static void RunTest(string testId, int port, bool https, ILogger logger)
+        public static async Task RunTest(string testId, int port, bool https, ILogger logger)
         {
             var tempFile = Path.GetTempPath() + Guid.NewGuid() + ".xml";
-            var processOptions = new ProcessStartInfo
+            using (var process = new Process())
             {
-                FileName = GetToolLocation(),
-                RedirectStandardOutput = true,
-                Arguments = $"{testId} -p {port.ToString(CultureInfo.InvariantCulture)} --strict -j {tempFile} --timeout 15"
-                    + (https ? " --tls --insecure" : ""),
-                WindowStyle = ProcessWindowStyle.Hidden,
-                CreateNoWindow = true,
-            };
+                process.StartInfo.FileName = GetToolLocation();
+                process.StartInfo.RedirectStandardOutput = true;
+                process.StartInfo.RedirectStandardError = true;
+                process.StartInfo.Arguments = $"{testId} -p {port.ToString(CultureInfo.InvariantCulture)} --strict -v -j {tempFile} --timeout {TimeoutSeconds}"
+                    + (https ? " --tls --insecure" : "");
+                process.StartInfo.WindowStyle = ProcessWindowStyle.Hidden;
+                process.StartInfo.CreateNoWindow = true;
 
-            using (var process = Process.Start(processOptions))
-            {
-                var data = process.StandardOutput.ReadToEnd();
-                logger.LogDebug(data);
+                process.OutputDataReceived += (_, args) =>
+                {
+                    if (!string.IsNullOrEmpty(args.Data))
+                    {
+                        logger.LogDebug(args.Data);
+                    }
+                };
+                process.ErrorDataReceived += (_, args) =>
+                {
+                    if (!string.IsNullOrEmpty(args.Data))
+                    {
+                        logger.LogError(args.Data);
+                    }
+                };
+                var exitedTcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+                process.EnableRaisingEvents = true; // Enables Exited
+                process.Exited += (_, args) =>
+                {
+                    logger.LogDebug("H2spec has exited.");
+                    exitedTcs.TrySetResult(0);
+                };
+
+                Assert.True(process.Start());
+                process.BeginOutputReadLine(); // Starts OutputDataReceived
+                process.BeginErrorReadLine(); // Starts ErrorDataReceived
+
+                if (await Task.WhenAny(exitedTcs.Task, Task.Delay(TimeSpan.FromSeconds(TimeoutSeconds * 2))) != exitedTcs.Task)
+                {
+                    try
+                    {
+                        process.Kill();
+                    }
+                    catch (Exception ex)
+                    {
+                        throw new TimeoutException($"h2spec didn't exit within {TimeoutSeconds * 2} seconds.", ex);
+                    }
+                    throw new TimeoutException($"h2spec didn't exit within {TimeoutSeconds * 2} seconds.");
+                }
 
                 var results = File.ReadAllText(tempFile);
                 File.Delete(tempFile);

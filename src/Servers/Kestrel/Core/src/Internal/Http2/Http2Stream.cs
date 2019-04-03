@@ -6,6 +6,7 @@ using System.Buffers;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipelines;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Connections;
 using Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http;
@@ -17,12 +18,14 @@ using Microsoft.Net.Http.Headers;
 
 namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http2
 {
-    public partial class Http2Stream : HttpProtocol
+    internal abstract partial class Http2Stream : HttpProtocol, IThreadPoolWorkItem
     {
         private readonly Http2StreamContext _context;
         private readonly Http2OutputProducer _http2Output;
         private readonly StreamInputFlowControl _inputFlowControl;
         private readonly StreamOutputFlowControl _outputFlowControl;
+
+        public Pipe RequestBodyPipe { get; }
 
         internal long DrainExpirationTicks { get; set; }
 
@@ -66,7 +69,6 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http2
         public bool EndStreamReceived => (_completionState & StreamCompletionFlags.EndStreamReceived) == StreamCompletionFlags.EndStreamReceived;
         private bool IsAborted => (_completionState & StreamCompletionFlags.Aborted) == StreamCompletionFlags.Aborted;
         internal bool RstStreamReceived => (_completionState & StreamCompletionFlags.RstStreamReceived) == StreamCompletionFlags.RstStreamReceived;
-        internal bool IsDraining => (_completionState & StreamCompletionFlags.Draining) == StreamCompletionFlags.Draining;
 
         public bool ReceivedEmptyRequestBody
         {
@@ -94,8 +96,6 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http2
                 {
                     Log.RequestBodyNotEntirelyRead(ConnectionIdFeature, TraceIdentifier);
 
-                    ApplyCompletionFlag(StreamCompletionFlags.Draining);
-
                     var states = ApplyCompletionFlag(StreamCompletionFlags.Aborted);
                     if (states.OldState != states.NewState)
                     {
@@ -117,7 +117,7 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http2
             }
             finally
             {
-                _context.StreamLifetimeHandler.OnStreamCompleted(StreamId);
+                _context.StreamLifetimeHandler.OnStreamCompleted(this);
             }
         }
 
@@ -290,7 +290,7 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http2
                 return false;
             }
 
-            var pathEncoded = pathSegment.IndexOf('%') >= 0;
+            var pathEncoded = pathSegment.Contains('%');
 
             // Compare with Http1Connection.OnOriginFormTarget
 
@@ -368,11 +368,16 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http2
                         {
                             RequestBodyPipe.Writer.Write(segment.Span);
                         }
-                        var flushTask = RequestBodyPipe.Writer.FlushAsync();
 
-                        // It shouldn't be possible for the RequestBodyPipe to fill up an return an incomplete task if
-                        // _inputFlowControl.Advance() didn't throw.
-                        Debug.Assert(flushTask.IsCompleted);
+                        // If the stream is completed go ahead and call RequestBodyPipe.Writer.Complete().
+                        // Data will still be available to the reader.
+                        if (!endStream)
+                        {
+                            var flushTask = RequestBodyPipe.Writer.FlushAsync();
+                            // It shouldn't be possible for the RequestBodyPipe to fill up an return an incomplete task if
+                            // _inputFlowControl.Advance() didn't throw.
+                            Debug.Assert(flushTask.IsCompleted);
+                        }
                     }
                 }
             }
@@ -502,6 +507,11 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http2
             }
         }
 
+        /// <summary>
+        /// Used to kick off the request processing loop by derived classes.
+        /// </summary>
+        public abstract void Execute();
+
         [Flags]
         private enum StreamCompletionFlags
         {
@@ -509,7 +519,6 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http2
             RstStreamReceived = 1,
             EndStreamReceived = 2,
             Aborted = 4,
-            Draining = 8,
         }
     }
 }

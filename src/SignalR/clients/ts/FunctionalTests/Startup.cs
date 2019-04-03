@@ -12,7 +12,9 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Connections;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Primitives;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.Net.Http.Headers;
@@ -34,7 +36,7 @@ namespace FunctionalTests
             {
                 options.EnableDetailedErrors = true;
             })
-            .AddJsonProtocol(options =>
+            .AddNewtonsoftJsonProtocol(options =>
             {
                 // we are running the same tests with JSON and MsgPack protocols and having
                 // consistent casing makes it cleaner to verify results
@@ -81,7 +83,7 @@ namespace FunctionalTests
                 });
         }
 
-        public void Configure(IApplicationBuilder app, IHostingEnvironment env)
+        public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
         {
             if (env.IsDevelopment())
             {
@@ -122,10 +124,7 @@ namespace FunctionalTests
                 return next.Invoke();
             });
 
-            app.UseConnections(routes =>
-            {
-                routes.MapConnectionHandler<EchoConnectionHandler>("/echo");
-            });
+            app.UseRouting();
 
             app.Use(async (context, next) =>
             {
@@ -138,23 +137,21 @@ namespace FunctionalTests
                 await next.Invoke();
             });
 
-            app.UseSignalR(routes =>
+            app.UseEndpoints(endpoints =>
             {
-                routes.MapHub<TestHub>("/testhub");
-                routes.MapHub<TestHub>("/testhub-nowebsockets", options => options.Transports = HttpTransportType.ServerSentEvents | HttpTransportType.LongPolling);
-                routes.MapHub<UncreatableHub>("/uncreatable");
-                routes.MapHub<HubWithAuthorization>("/authorizedhub");
-            });
+                endpoints.MapHub<TestHub>("/testhub");
+                endpoints.MapHub<TestHub>("/testhub-nowebsockets", options => options.Transports = HttpTransportType.ServerSentEvents | HttpTransportType.LongPolling);
+                endpoints.MapHub<UncreatableHub>("/uncreatable");
+                endpoints.MapHub<HubWithAuthorization>("/authorizedhub");
 
-            app.Use(next => async (context) =>
-            {
-                if (context.Request.Path.StartsWithSegments("/generateJwtToken"))
+                endpoints.MapConnectionHandler<EchoConnectionHandler>("/echo");
+
+                endpoints.MapGet("/generateJwtToken", context =>
                 {
-                    await context.Response.WriteAsync(GenerateJwtToken());
-                    return;
-                }
+                    return context.Response.WriteAsync(GenerateJwtToken());
+                });
 
-                if (context.Request.Path.StartsWithSegments("/deployment"))
+                endpoints.MapGet("/deployment", context =>
                 {
                     var attributes = Assembly.GetAssembly(typeof(Startup)).GetCustomAttributes<AssemblyMetadataAttribute>();
 
@@ -182,7 +179,9 @@ namespace FunctionalTests
 
                         json.WriteTo(writer);
                     }
-                }
+
+                    return Task.CompletedTask;
+                });
             });
         }
 

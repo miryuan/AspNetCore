@@ -9,7 +9,7 @@ import { ILogger, LogLevel } from "./ILogger";
 import { HttpTransportType, ITransport, TransferFormat } from "./ITransport";
 import { LongPollingTransport } from "./LongPollingTransport";
 import { ServerSentEventsTransport } from "./ServerSentEventsTransport";
-import { Arg, createLogger } from "./Utils";
+import { Arg, createLogger, Platform } from "./Utils";
 import { WebSocketTransport } from "./WebSocketTransport";
 
 /** @private */
@@ -38,7 +38,7 @@ const MAX_REDIRECTS = 100;
 
 let WebSocketModule: any = null;
 let EventSourceModule: any = null;
-if (typeof window === "undefined" && typeof require !== "undefined") {
+if (Platform.isNode && typeof require !== "undefined") {
     // In order to ignore the dynamic require in webpack builds we need to do this magic
     // @ts-ignore: TS doesn't know about these names
     const requireFunc = typeof __webpack_require__ === "function" ? __non_webpack_require__ : require;
@@ -71,18 +71,17 @@ export class HttpConnection implements IConnection {
         options = options || {};
         options.logMessageContent = options.logMessageContent || false;
 
-        const isNode = typeof window === "undefined";
-        if (!isNode && typeof WebSocket !== "undefined" && !options.WebSocket) {
+        if (!Platform.isNode && typeof WebSocket !== "undefined" && !options.WebSocket) {
             options.WebSocket = WebSocket;
-        } else if (isNode && !options.WebSocket) {
+        } else if (Platform.isNode && !options.WebSocket) {
             if (WebSocketModule) {
                 options.WebSocket = WebSocketModule;
             }
         }
 
-        if (!isNode && typeof EventSource !== "undefined" && !options.EventSource) {
+        if (!Platform.isNode && typeof EventSource !== "undefined" && !options.EventSource) {
             options.EventSource = EventSource;
-        } else if (isNode && !options.EventSource) {
+        } else if (Platform.isNode && !options.EventSource) {
             if (typeof EventSourceModule !== "undefined") {
                 options.EventSource = EventSourceModule;
             }
@@ -116,7 +115,7 @@ export class HttpConnection implements IConnection {
 
     public send(data: string | ArrayBuffer): Promise<void> {
         if (this.connectionState !== ConnectionState.Connected) {
-            throw new Error("Cannot send data if the connection is not in the 'Connected' State.");
+            return Promise.reject(new Error("Cannot send data if the connection is not in the 'Connected' State."));
         }
 
         // Transport will not be null if state is connected
@@ -158,7 +157,7 @@ export class HttpConnection implements IConnection {
                     // No fallback or negotiate in this case.
                     await this.transport!.connect(url, transferFormat);
                 } else {
-                    throw Error("Negotiation can only be skipped when using the WebSocket transport directly.");
+                    return Promise.reject(new Error("Negotiation can only be skipped when using the WebSocket transport directly."));
                 }
             } else {
                 let negotiateResponse: INegotiateResponse | null = null;
@@ -172,11 +171,11 @@ export class HttpConnection implements IConnection {
                     }
 
                     if (negotiateResponse.error) {
-                        throw Error(negotiateResponse.error);
+                        return Promise.reject(new Error(negotiateResponse.error));
                     }
 
                     if ((negotiateResponse as any).ProtocolVersion) {
-                        throw Error("Detected a connection attempt to an ASP.NET SignalR Server. This client only supports connecting to an ASP.NET Core SignalR Server. See https://aka.ms/signalr-core-differences for details.");
+                        return Promise.reject(new Error("Detected a connection attempt to an ASP.NET SignalR Server. This client only supports connecting to an ASP.NET Core SignalR Server. See https://aka.ms/signalr-core-differences for details."));
                     }
 
                     if (negotiateResponse.url) {
@@ -195,7 +194,7 @@ export class HttpConnection implements IConnection {
                 while (negotiateResponse.url && redirects < MAX_REDIRECTS);
 
                 if (redirects === MAX_REDIRECTS && negotiateResponse.url) {
-                    throw Error("Negotiate redirection limit exceeded.");
+                    return Promise.reject(new Error("Negotiate redirection limit exceeded."));
                 }
 
                 await this.createTransport(url, this.options.transport, negotiateResponse, transferFormat);
@@ -215,7 +214,7 @@ export class HttpConnection implements IConnection {
             this.logger.log(LogLevel.Error, "Failed to start the connection: " + e);
             this.connectionState = ConnectionState.Disconnected;
             this.transport = undefined;
-            throw e;
+            return Promise.reject(e);
         }
     }
 
@@ -239,13 +238,13 @@ export class HttpConnection implements IConnection {
             });
 
             if (response.statusCode !== 200) {
-                throw Error(`Unexpected status code returned from negotiate ${response.statusCode}`);
+                return Promise.reject(new Error(`Unexpected status code returned from negotiate ${response.statusCode}`));
             }
 
             return JSON.parse(response.content as string) as INegotiateResponse;
         } catch (e) {
             this.logger.log(LogLevel.Error, "Failed to complete negotiation with the server: " + e);
-            throw e;
+            return Promise.reject(e);
         }
     }
 
@@ -269,29 +268,34 @@ export class HttpConnection implements IConnection {
             return;
         }
 
+        const transportExceptions: any[] = [];
         const transports = negotiateResponse.availableTransports || [];
         for (const endpoint of transports) {
-            this.connectionState = ConnectionState.Connecting;
-            const transport = this.resolveTransport(endpoint, requestedTransport, requestedTransferFormat);
-            if (typeof transport === "number") {
-                this.transport = this.constructTransport(transport);
-                if (!negotiateResponse.connectionId) {
-                    negotiateResponse = await this.getNegotiationResponse(url);
-                    connectUrl = this.createConnectUrl(url, negotiateResponse.connectionId);
-                }
-                try {
+            try {
+                this.connectionState = ConnectionState.Connecting;
+                const transport = this.resolveTransport(endpoint, requestedTransport, requestedTransferFormat);
+                if (typeof transport === "number") {
+                    this.transport = this.constructTransport(transport);
+                    if (!negotiateResponse.connectionId) {
+                        negotiateResponse = await this.getNegotiationResponse(url);
+                        connectUrl = this.createConnectUrl(url, negotiateResponse.connectionId);
+                    }
                     await this.transport!.connect(connectUrl, requestedTransferFormat);
                     this.changeState(ConnectionState.Connecting, ConnectionState.Connected);
                     return;
-                } catch (ex) {
-                    this.logger.log(LogLevel.Error, `Failed to start the transport '${HttpTransportType[transport]}': ${ex}`);
-                    this.connectionState = ConnectionState.Disconnected;
-                    negotiateResponse.connectionId = undefined;
                 }
+            } catch (ex) {
+                this.logger.log(LogLevel.Error, `Failed to start the transport '${endpoint.transport}': ${ex}`);
+                this.connectionState = ConnectionState.Disconnected;
+                negotiateResponse.connectionId = undefined;
+                transportExceptions.push(`${endpoint.transport} failed: ${ex}`);
             }
         }
 
-        throw new Error("Unable to initialize any of the available transports.");
+        if (transportExceptions.length > 0) {
+            return Promise.reject(new Error(`Unable to connect to the server with any of the available transports. ${transportExceptions.join(" ")}`));
+        }
+        return Promise.reject(new Error("None of the transports supported by the client are supported by the server."));
     }
 
     private constructTransport(transport: HttpTransportType) {
@@ -324,15 +328,18 @@ export class HttpConnection implements IConnection {
                     if ((transport === HttpTransportType.WebSockets && !this.options.WebSocket) ||
                         (transport === HttpTransportType.ServerSentEvents && !this.options.EventSource)) {
                         this.logger.log(LogLevel.Debug, `Skipping transport '${HttpTransportType[transport]}' because it is not supported in your environment.'`);
+                        throw new Error(`'${HttpTransportType[transport]}' is not supported in your environment.`);
                     } else {
                         this.logger.log(LogLevel.Debug, `Selecting transport '${HttpTransportType[transport]}'.`);
                         return transport;
                     }
                 } else {
                     this.logger.log(LogLevel.Debug, `Skipping transport '${HttpTransportType[transport]}' because it does not support the requested transfer format '${TransferFormat[requestedTransferFormat]}'.`);
+                    throw new Error(`'${HttpTransportType[transport]}' does not support ${TransferFormat[requestedTransferFormat]}.`);
                 }
             } else {
                 this.logger.log(LogLevel.Debug, `Skipping transport '${HttpTransportType[transport]}' because it was disabled by the client.`);
+                throw new Error(`'${HttpTransportType[transport]}' is disabled by the client.`);
             }
         }
         return null;
@@ -375,7 +382,7 @@ export class HttpConnection implements IConnection {
             return url;
         }
 
-        if (typeof window === "undefined" || !window || !window.document) {
+        if (!Platform.isBrowser || !window.document) {
             throw new Error(`Cannot resolve '${url}'.`);
         }
 

@@ -1,4 +1,4 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
+// Copyright (c) .NET Foundation. All rights reserved.
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 
 using System;
@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.AspNetCore.Testing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -21,7 +22,7 @@ namespace Microsoft.AspNetCore.Server.Kestrel.InMemory.FunctionalTests.TestTrans
     /// <summary>
     /// In-memory TestServer
     /// </summary
-    public class TestServer : IDisposable, IStartup
+    internal class TestServer : IDisposable, IStartup
     {
         private readonly MemoryPool<byte> _memoryPool;
         private readonly RequestDelegate _app;
@@ -68,6 +69,7 @@ namespace Microsoft.AspNetCore.Server.Kestrel.InMemory.FunctionalTests.TestTrans
             HttpClientSlim = new InMemoryHttpClientSlim(this);
 
             var hostBuilder = new WebHostBuilder()
+                .UseSetting(WebHostDefaults.ShutdownTimeoutKey, TestConstants.DefaultTimeout.TotalSeconds.ToString())
                 .ConfigureServices(services =>
                 {
                     configureServices(services);
@@ -90,7 +92,6 @@ namespace Microsoft.AspNetCore.Server.Kestrel.InMemory.FunctionalTests.TestTrans
                 });
 
             _host = hostBuilder.Build();
-
             _host.Start();
         }
 
@@ -107,9 +108,9 @@ namespace Microsoft.AspNetCore.Server.Kestrel.InMemory.FunctionalTests.TestTrans
             return new InMemoryConnection(transportConnection);
         }
 
-        public Task StopAsync()
+        public Task StopAsync(CancellationToken cancellationToken = default)
         {
-            return _host.StopAsync();
+            return _host.StopAsync(cancellationToken);
         }
 
         public void Dispose()
@@ -132,7 +133,7 @@ namespace Microsoft.AspNetCore.Server.Kestrel.InMemory.FunctionalTests.TestTrans
         {
             try
             {
-                var middlewareTask =  _transportFactory.ConnectionDispatcher.OnConnection(transportConnection);
+                var middlewareTask = _transportFactory.ConnectionDispatcher.OnConnection(transportConnection);
                 var transportTask = CancellationTokenAsTask(transportConnection.ConnectionClosed);
 
                 await transportTask;
@@ -142,7 +143,7 @@ namespace Microsoft.AspNetCore.Server.Kestrel.InMemory.FunctionalTests.TestTrans
             }
             catch (Exception ex)
             {
-               Debug.Assert(false, $"Unexpected exception: {ex}.");
+                Debug.Assert(false, $"Unexpected exception: {ex}.");
             }
         }
 

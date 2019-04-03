@@ -1,4 +1,4 @@
-﻿// Copyright (c) .NET Foundation. All rights reserved.
+// Copyright (c) .NET Foundation. All rights reserved.
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 
 using System.Threading.Tasks;
@@ -42,6 +42,7 @@ namespace Microsoft.AspNetCore.Server.Kestrel.InMemory.FunctionalTests
                         "",
                         "Hello World");
                 }
+                await server.StopAsync();
             }
         }
 
@@ -87,14 +88,16 @@ namespace Microsoft.AspNetCore.Server.Kestrel.InMemory.FunctionalTests
                         "",
                         "Hello World");
                 }
+                await server.StopAsync();
             }
         }
 
         [Theory]
-        [InlineData(HttpMethod.Options, "*")]
-        [InlineData(HttpMethod.Connect, "host")]
-        public async Task NonPathRequestTargetSetInRawTarget(HttpMethod method, string requestTarget)
+        [InlineData((int)HttpMethod.Options, "*")]
+        [InlineData((int)HttpMethod.Connect, "host")]
+        public async Task NonPathRequestTargetSetInRawTarget(int intMethod, string requestTarget)
         {
+            var method = (HttpMethod)intMethod;
             var testContext = new TestServiceContext(LoggerFactory);
 
             using (var server = new TestServer(async context =>
@@ -126,6 +129,7 @@ namespace Microsoft.AspNetCore.Server.Kestrel.InMemory.FunctionalTests
                         "",
                         "Hello World");
                 }
+                await server.StopAsync();
             }
         }
     }

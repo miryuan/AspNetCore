@@ -11,11 +11,10 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Connections;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Infrastructure;
-using Microsoft.AspNetCore.Server.Kestrel.Transport.Abstractions.Internal;
 
 namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http
 {
-    public partial class Http1Connection : HttpProtocol, IRequestProcessor
+    internal partial class Http1Connection : HttpProtocol, IRequestProcessor
     {
         private const byte ByteAsterisk = (byte)'*';
         private const byte ByteForwardSlash = (byte)'/';
@@ -44,26 +43,29 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http
             _keepAliveTicks = ServerOptions.Limits.KeepAliveTimeout.Ticks;
             _requestHeadersTimeoutTicks = ServerOptions.Limits.RequestHeadersTimeout.Ticks;
 
-            RequestBodyPipe = CreateRequestBodyPipe();
-
             _http1Output = new Http1OutputProducer(
                 _context.Transport.Output,
                 _context.ConnectionId,
                 _context.ConnectionContext,
                 _context.ServiceContext.Log,
                 _context.TimeoutControl,
-                this);
+                this,
+                _context.MemoryPool);
 
+            Input = _context.Transport.Input;
             Output = _http1Output;
+            MemoryPool = _context.MemoryPool;
         }
 
-        public PipeReader Input => _context.Transport.Input;
+        public PipeReader Input { get; }
 
         public bool RequestTimedOut => _requestTimedOut;
 
         public MinDataRate MinRequestBodyDataRate { get; set; }
 
         public MinDataRate MinResponseDataRate { get; set; }
+
+        public MemoryPool<byte> MemoryPool { get; }
 
         protected override void OnRequestProcessingEnded()
         {
@@ -529,17 +531,5 @@ namespace Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http
         }
 
         void IRequestProcessor.Tick(DateTimeOffset now) { }
-
-        private Pipe CreateRequestBodyPipe()
-            => new Pipe(new PipeOptions
-            (
-                pool: _context.MemoryPool,
-                readerScheduler: ServiceContext.Scheduler,
-                writerScheduler: PipeScheduler.Inline,
-                pauseWriterThreshold: 1,
-                resumeWriterThreshold: 1,
-                useSynchronizationContext: false,
-                minimumSegmentSize: KestrelMemoryPool.MinimumSegmentSize
-            ));
     }
 }

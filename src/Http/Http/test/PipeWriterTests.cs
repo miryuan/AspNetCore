@@ -10,9 +10,9 @@ using System.Linq;
 using System.Threading.Tasks;
 using Xunit;
 
-namespace Microsoft.AspNetCore.Http.Tests
+namespace System.IO.Pipelines.Tests
 {
-    public class PipeWriterTests : PipeTest
+    public class PipeWriterTests : StreamPipeTest
     {
 
         [Theory]
@@ -89,14 +89,14 @@ namespace Microsoft.AspNetCore.Http.Tests
             Assert.Equal(memory, secondMemory);
         }
 
-        [Fact]
-        public void CanGetNewSpanWhenNoAdvanceWhenSizeTooLarge()
+        [Theory]
+        [InlineData(0)]
+        [InlineData(2048)]
+        public void GetSpanWithZeroSizeHintReturnsMaxBufferSizeOfPool(int sizeHint)
         {
-            var span = Writer.GetSpan(0);
+            var span = Writer.GetSpan(sizeHint);
 
-            var secondSpan = Writer.GetSpan(10000);
-
-            Assert.False(span.SequenceEqual(secondSpan));
+            Assert.Equal(4096, span.Length);
         }
 
         [Fact]

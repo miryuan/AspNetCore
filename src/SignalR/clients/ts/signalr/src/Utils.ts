@@ -4,7 +4,8 @@
 import { HttpClient } from "./HttpClient";
 import { ILogger, LogLevel } from "./ILogger";
 import { NullLogger } from "./Loggers";
-import { IStreamResult, IStreamSubscriber, ISubscription } from "./Stream";
+import { IStreamSubscriber, ISubscription } from "./Stream";
+import { Subject } from "./Subject";
 
 /** @private */
 export class Arg {
@@ -19,6 +20,22 @@ export class Arg {
         if (!(val in values)) {
             throw new Error(`Unknown ${name} value: ${val}.`);
         }
+    }
+}
+
+/** @private */
+export class Platform {
+
+    public static get isBrowser(): boolean {
+        return typeof window === "object";
+    }
+
+    public static get isWebWorker(): boolean {
+        return typeof self === "object" && "importScripts" in self;
+    }
+
+    public static get isNode(): boolean {
+        return !this.isBrowser && !this.isWebWorker;
     }
 }
 
@@ -59,8 +76,8 @@ export function formatArrayBuffer(data: ArrayBuffer): string {
 export function isArrayBuffer(val: any): val is ArrayBuffer {
     return val && typeof ArrayBuffer !== "undefined" &&
         (val instanceof ArrayBuffer ||
-        // Sometimes we get an ArrayBuffer that doesn't satisfy instanceof
-        (val.constructor && val.constructor.name === "ArrayBuffer"));
+            // Sometimes we get an ArrayBuffer that doesn't satisfy instanceof
+            (val.constructor && val.constructor.name === "ArrayBuffer"));
 }
 
 /** @private */
@@ -105,44 +122,6 @@ export function createLogger(logger?: ILogger | LogLevel) {
 }
 
 /** @private */
-export class Subject<T> implements IStreamResult<T> {
-    public observers: Array<IStreamSubscriber<T>>;
-    public cancelCallback: () => Promise<void>;
-
-    constructor(cancelCallback: () => Promise<void>) {
-        this.observers = [];
-        this.cancelCallback = cancelCallback;
-    }
-
-    public next(item: T): void {
-        for (const observer of this.observers) {
-            observer.next(item);
-        }
-    }
-
-    public error(err: any): void {
-        for (const observer of this.observers) {
-            if (observer.error) {
-                observer.error(err);
-            }
-        }
-    }
-
-    public complete(): void {
-        for (const observer of this.observers) {
-            if (observer.complete) {
-                observer.complete();
-            }
-        }
-    }
-
-    public subscribe(observer: IStreamSubscriber<T>): ISubscription<T> {
-        this.observers.push(observer);
-        return new SubjectSubscription(this, observer);
-    }
-}
-
-/** @private */
 export class SubjectSubscription<T> implements ISubscription<T> {
     private subject: Subject<T>;
     private observer: IStreamSubscriber<T>;
@@ -158,7 +137,7 @@ export class SubjectSubscription<T> implements ISubscription<T> {
             this.subject.observers.splice(index, 1);
         }
 
-        if (this.subject.observers.length === 0) {
+        if (this.subject.observers.length === 0 && this.subject.cancelCallback) {
             this.subject.cancelCallback().catch((_) => { });
         }
     }
